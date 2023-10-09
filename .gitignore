@@ -1,0 +1,22 @@
+# Virtual Environment
+venv/
+
+# Ignore database configuration file
+.env
+
+# Ignore CSV files (if needed)
+csv_reports/
+
+# Other settings
+.vscode/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pycachefile
+.cache/
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.pycachefile
