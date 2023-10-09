@@ -1,9 +1,10 @@
+from flask import Flask, jsonify, abort, request,send_file
 import pandas as pd
 import psycopg2
-from flask import Flask, jsonify, abort, request,send_file
 import uuid
 import os
 import csv
+from datetime import datetime, time, timedelta
 from dotenv import load_dotenv
 
 app = Flask(__name__)
@@ -17,7 +18,7 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 
-# Function to connect to the database
+# Function to connect to the PostgresSQL database
 def connect_to_db():
     try:
         conn = psycopg2.connect(
@@ -67,7 +68,7 @@ def create_tables(conn):
     except psycopg2.Error as e:
         print(f"Error: Unable to create tables: {e}")
 
-# Function to load data into the database
+# Function to load data into the PostgresSQL database
 def load_data_into_db(conn):
     try:
         store_status_csv_path = "./data/status.csv"
@@ -101,24 +102,43 @@ def load_data_into_db(conn):
 
 conn.close()
 
+# Function to load and preprocess data from the PostgresSQL database
 def load_and_preprocess_data():
-    store_status_data = pd.read_csv("./data/status.csv", parse_dates=["timestamp_utc"])
-    business_hours_data = pd.read_csv("./data/bussinesshours.csv", parse_dates=["start_time_local", "end_time_local"])
-    merged_data = pd.merge(store_status_data, business_hours_data, on='store_id')
-    return merged_data
+    conn = connect_to_db()
+    if conn is None:
+        return None
+
+    try:
+        store_status_data = pd.read_sql("SELECT * FROM store_status", conn)
+        business_hours_data = pd.read_sql("SELECT * FROM business_hours", conn)
+
+        # Merge the data based on 'store_id'
+        merged_data = pd.merge(store_status_data, business_hours_data, on='store_id')
+
+        return merged_data
+    except Exception as e:
+        print(f"Error: Unable to load and preprocess data from the database: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
 
 def calculate_uptime_downtime(merged_data):
+    # Convert 'start_time_local' and 'end_time_local' to timedelta type objects
+    merged_data['start_time_local'] = merged_data['start_time_local'].apply(lambda x: timedelta(hours=x.hour, minutes=x.minute, seconds=x.second))
+    merged_data['end_time_local'] = merged_data['end_time_local'].apply(lambda x: timedelta(hours=x.hour, minutes=x.minute, seconds=x.second))
 
-    # Calculate uptime and downtime for each record
+    # Calculating the uptime and downtime for each record
     merged_data['uptime'] = (merged_data['end_time_local'] - merged_data['start_time_local']).dt.total_seconds() / 60
 
-    # If uptime is less than or equal to 0, set business_hours_downtime to 0
+    # If uptime is less than or equal to 0, we will set business_hours_downtime to 0
     merged_data['business_hours_downtime'] = merged_data['uptime']
     merged_data.loc[merged_data['uptime'] <= 0, 'business_hours_downtime'] = 0
 
-    # If uptime exceeds 24 hours, set total_downtime to 0
+    # If uptime exceeds 24 hours, then we are setting total_downtime to 0
     merged_data['total_downtime'] = 24 * 60 - merged_data['uptime']
     merged_data.loc[merged_data['uptime'] > 24 * 60, 'total_downtime'] = 24 * 60
+
 
     report_data = merged_data.groupby('store_id').agg({
         'uptime': 'sum',
@@ -126,7 +146,8 @@ def calculate_uptime_downtime(merged_data):
         'total_downtime': 'sum'
     }).reset_index()
 
-    # Calculate uptime and downtime for the last hour
+    # Calculate uptime and downtime 
+    # last hour
 
     current_timestamp = merged_data['timestamp_utc'].max()
     last_hour_timestamp = current_timestamp - pd.Timedelta(hours=1)
@@ -134,21 +155,21 @@ def calculate_uptime_downtime(merged_data):
     uptime_last_hour = last_hour_data['uptime'].sum()
     downtime_last_hour = last_hour_data['total_downtime'].sum()
 
-    # Calculate uptime and downtime for the last day
+    # last day
 
     last_day_timestamp = current_timestamp - pd.Timedelta(days=1)
     last_day_data = merged_data[(merged_data['timestamp_utc'] > last_day_timestamp) & (merged_data['timestamp_utc'] <= current_timestamp)]
     uptime_last_day = last_day_data['uptime'].sum() / 60
     downtime_last_day = last_day_data['total_downtime'].sum() / 60
     
-    # Calculate uptime and downtime for the last week
+    # last week
 
     last_week_timestamp = current_timestamp - pd.Timedelta(days=7)
     last_week_data = merged_data[(merged_data['timestamp_utc'] > last_week_timestamp) & (merged_data['timestamp_utc'] <= current_timestamp)]
     uptime_last_week = last_week_data['uptime'].sum() / 60 / 24
     downtime_last_week = last_week_data['total_downtime'].sum() / 60 / 24
 
-    # Add the calculated fields to the report data
+    # Combining all the fields into the reponse report data
 
     last_hour_timestamp = current_timestamp - pd.Timedelta(hours=1)
     last_hour_data = merged_data[(merged_data['timestamp_utc'] > last_hour_timestamp) & (merged_data['timestamp_utc'] <= current_timestamp)]
@@ -179,7 +200,7 @@ def generate_csv_file(report_data, file_name):
 
     file_path = os.path.join(csv_dir, file_name)
 
-    # Write report data to a CSV file
+    # Writing the report data to a CSV file
     with open(file_path, 'w', newline='') as csvfile:
         fieldnames = ['store_id', 'uptime_last_hour', 'uptime_last_day', 'uptime_last_week', 
                       'downtime_last_hour', 'downtime_last_day', 'downtime_last_week']
@@ -189,12 +210,19 @@ def generate_csv_file(report_data, file_name):
         writer.writeheader()
         for row in report_data:
             # Adapt the data to match the field names
+            # store_id 
+            # uptime_last_hour(in minutes), 
+            # uptime_last_day(in hours), 
+            # update_last_week(in hours), 
+            # downtime_last_hour(in minutes), 
+            # downtime_last_day(in hours), 
+            # downtime_last_week(in hours) 
             adapted_row = {
                 'store_id': row['store_id'],
                 'uptime_last_hour': row['uptime_last_hour'],
                 'uptime_last_day': row['uptime_last_day'],
                 'uptime_last_week': row['uptime_last_week'],
-                'downtime_last_hour': row['business_hours_downtime'],  # Adjust this based on your logic
+                'downtime_last_hour': row['business_hours_downtime'], 
                 'downtime_last_day': row['downtime_last_day'],
                 'downtime_last_week': row['downtime_last_week']
             }
