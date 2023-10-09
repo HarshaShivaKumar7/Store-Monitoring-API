@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Store Monitoring API
 
 This repository contains the code for a Store Monitoring API that helps monitor the online status of restaurants during their business hours. It provides APIs to trigger report generation and retrieve the status report.
@@ -52,7 +51,3 @@ This repository contains the code for a Store Monitoring API that helps monitor 
 ## Contributors
 - H S Harsha
 
-=======
-# Store-Monitoring-API
-# Store-Monitoring-API
->>>>>>> 93cbc1bbc567f45627a92307b0f42f4f22065391
